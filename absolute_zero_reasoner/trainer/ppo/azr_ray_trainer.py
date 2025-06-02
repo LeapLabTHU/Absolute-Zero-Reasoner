@@ -707,6 +707,9 @@ class CodeIORayPPOTrainer(ReasonRLRayPPOTrainer):
         ))
 
     def _create_train_code_pred_dataloader(self, problem_type: str, data_len: int) -> DataLoader:
+        
+        data_len = data_len * 2 - 1  # Prevent insufficient data after filtering
+
         if problem_type == 'code_i':
             dataset_key = 'input'
         elif problem_type == 'code_o':
