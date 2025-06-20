@@ -319,7 +319,11 @@ def redistribute_dtensor(param_name: str, loaded_weights: DTensor, parallelize_p
         local_loaded_weights = loaded_weights.redistribute(device_mesh=loaded_weights.device_mesh,
                                                            placements=placement).to_local()
     else:
-        local_loaded_weights = loaded_weights.full_tensor()
+        # Handle both DTensor and regular Tensor objects
+        if hasattr(loaded_weights, 'full_tensor'):
+            local_loaded_weights = loaded_weights.full_tensor()
+        else:
+            local_loaded_weights = loaded_weights
     return local_loaded_weights
 
 

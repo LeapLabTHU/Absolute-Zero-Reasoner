@@ -467,7 +467,6 @@ class CodeIORewardManager():
                     if acc_reward is None:
                         all_scores['none_count'] += 1
                         acc_reward = 0.
-                        print(f"error in pred_code_i, not in [0, 1], acc_reward={acc_reward}\nprogram:\n{program}\n---\nanswer:\n{answer}\n---\nimports:\n{imports}\n---\n")
                     if acc_reward > 0.0:
                         correct_predictions.append(data_dict)
                 elif problem_types[i].endswith('code_o'):

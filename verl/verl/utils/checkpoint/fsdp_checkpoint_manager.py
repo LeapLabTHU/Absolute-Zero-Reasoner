@@ -28,6 +28,11 @@ from transformers import PreTrainedTokenizer
 
 from .checkpoint_manager import BaseCheckpointManager
 
+# --- START REQUIRED IMPORTS for add_safe_globals ---
+import numpy as np
+from torch.utils.data import DataLoader # Needed for DataLoader global
+# --- END REQUIRED IMPORTS ---
+
 
 class FSDPCheckpointManager(BaseCheckpointManager):
     """
@@ -63,9 +68,22 @@ class FSDPCheckpointManager(BaseCheckpointManager):
         local_optim_path = copy_local_path_from_hdfs(remote_optim_path)
         local_extra_state_path = copy_local_path_from_hdfs(remote_extra_state_path)
 
+        # --- START FIX: Add safe globals for numpy objects and DataLoader ---
+        # This is necessary for PyTorch 2.6+ when weights_only=True is default for torch.load
+        # to allow unpickling numpy objects and other PyTorch internal objects like DataLoader.
+        # It's important to trust the source of these checkpoints when doing this.
+        torch.serialization.add_safe_globals([
+            np._core.multiarray._reconstruct,
+            np.ndarray, # Often also needed for numpy arrays themselves
+            np.dtype, # Sometimes dtype objects are also globals
+            np.dtypes.UInt32DType, # From previous error
+            DataLoader, # From previous error
+        ])
+        # --- END FIX ---
+
         model_state_dict = torch.load(local_model_path)
         optimizer_state_dict = torch.load(local_optim_path)
-        extra_state_dict = torch.load(local_extra_state_path)
+        extra_state_dict = torch.load(local_extra_state_path) # This line was causing the UnpicklingError
 
         if del_local_after_load:
             try:
@@ -82,7 +100,7 @@ class FSDPCheckpointManager(BaseCheckpointManager):
         state_dict_cfg = ShardedStateDictConfig(offload_to_cpu=True)
         optim_cfg = ShardedOptimStateDictConfig(offload_to_cpu=True)
         with FSDP.state_dict_type(self.model, StateDictType.SHARDED_STATE_DICT, state_dict_cfg, optim_cfg):
-            self.model.load_state_dict(model_state_dict)
+            self.model.load_state_dict(model_state_dict, strict=False)
             if self.optimizer is not None:
                 self.optimizer.load_state_dict(optimizer_state_dict)
         # recover random state

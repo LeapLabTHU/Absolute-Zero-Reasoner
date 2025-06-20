@@ -33,10 +33,10 @@ install_requires = [
   'pyarrow>=15.0.0',
   'pybind11',
   'pylatexenc',
-  'ray>=2.10',
-  'tensordict<0.6',
+  'ray==2.46.0',
+  'tensordict==0.8.3',
   'transformers',
-  'vllm<=0.6.3',
+  # 'vllm',
   'wandb',
 ]
 

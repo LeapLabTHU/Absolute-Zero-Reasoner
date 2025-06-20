@@ -16,4 +16,13 @@ from .base import BaseRollout
 from .naive import NaiveRollout
 from .hf_rollout import HFRollout
 
-__all__ = ["BaseRollout", "NaiveRollout", "HFRollout"]
+try:
+    from .vllm_rollout import vLLMRollout
+    _vllm_available = True
+except ImportError:
+    _vllm_available = False
+
+if _vllm_available:
+    __all__ = ["BaseRollout", "NaiveRollout", "HFRollout", "vLLMRollout"]
+else:
+    __all__ = ["BaseRollout", "NaiveRollout", "HFRollout"]

@@ -18,14 +18,20 @@ import ray
 import hydra
 from pathlib import Path
 from pprint import pprint
+import os
+import torch
+import time
+import traceback
+import subprocess
 
 from omegaconf import OmegaConf
 from verl.utils.fs import copy_local_path_from_hdfs
 from verl.utils import hf_tokenizer
-from verl.trainer.ppo.ray_trainer import ResourcePoolManager, Role
 
 from absolute_zero_reasoner.trainer.ppo.azr_ray_trainer import CodeIORayPPOTrainer
 from absolute_zero_reasoner.rewards.reward_managers import CodeIORewardManager
+from verl.trainer.ppo.ray_trainer import ResourcePoolManager, Role
+from transformers import AutoTokenizer
 
 
 @hydra.main(config_path='configs', config_name='azr_ppo_trainer', version_base=None)
@@ -36,14 +42,17 @@ def main(config):
 def run_ppo(config, compute_score=None):
     if not ray.is_initialized():
         # this is for local ray cluster
-        ray.init(address=None, runtime_env={'env_vars': {'TOKENIZERS_PARALLELISM': 'true', 'NCCL_DEBUG': 'WARN'}})
+        ray.init(address=None, runtime_env={'env_vars': {'TOKENIZERS_PARALLELISM': 'true', 'NCCL_DEBUG': 'WARN'}}, object_store_memory=1000000000, _plasma_directory="/tmp", num_cpus=4, ignore_reinit_error=True)
 
     ray.get(main_task.remote(config, compute_score))
 
 
-@ray.remote(num_cpus=1)  # please make sure main_task is not scheduled on head
-def main_task(config, compute_score=None):
-    pprint(OmegaConf.to_container(config, resolve=True))  # resolve=True will eval symbol values
+@ray.remote
+def main_task(config, compute_score_fn):
+    # import time
+    # proc_pid = os.getpid()
+    # print(f"{log_prefix}: Entering main_task (orchestrator - no GPU needed).")
+    # pprint(OmegaConf.to_container(config, resolve=True))  # resolve=True will eval symbol values
     OmegaConf.resolve(config)
 
     if config.trainer.debug:
@@ -107,12 +116,6 @@ def main_task(config, compute_score=None):
         mapping[Role.RefPolicy] = global_pool_id
         role_worker_mapping[Role.RefPolicy] = ray.remote(ActorRolloutRefWorker)
 
-    # we should adopt a multi-source reward function here
-    # - for rule-based rm, we directly call a reward score
-    # - for model-based rm, we call a model
-    # - for code related prompt, we send to a sandbox if there are test cases
-    # - finally, we combine all the rewards together
-    # - The reward type depends on the tag of the data
     if config.reward_model.enable:
         if config.reward_model.strategy == 'fsdp':
             from verl.workers.fsdp_workers import RewardModelWorker
@@ -140,7 +143,6 @@ def main_task(config, compute_score=None):
         boxed_retry=config.reward_fn.boxed_retry,
     )
 
-    # Note that we always use function-based RM for validation
     val_reward_fn = CodeIORewardManager(
         tokenizer=tokenizer,
         num_examine=1,
@@ -171,17 +173,72 @@ def main_task(config, compute_score=None):
         config.trainer.wandb_tags = wandb_tags
 
     trainer = CodeIORayPPOTrainer(
-        past_epoch_window=config.azr.past_epoch_window,
+        # past_epoch_window=config.azr.past_epoch_window,
         config=config,
         tokenizer=tokenizer,
         role_worker_mapping=role_worker_mapping,
         resource_pool_manager=resource_pool_manager,
-        ray_worker_group_cls=ray_worker_group_cls,
-        reward_fn=reward_fn,
-        val_reward_fn=val_reward_fn,
+        # ray_worker_group_cls=ray_worker_group_cls,
+        reward_fn=reward_fn,  # Add this line
+        val_reward_fn=val_reward_fn  # Add this line if validation rewards are needed
     )
 
-    trainer.init_workers()
+    max_retries = 3
+    for attempt in range(max_retries):
+        try:
+            if attempt > 0:
+                # Better Ray cleanup before retry
+                # import time
+                print(f"Cleaning up Ray state before retry {attempt}...")
+                
+                # Force shutdown and cleanup
+                try:
+                    ray.shutdown()
+                    time.sleep(3)
+                except:
+                    pass
+                
+                # Kill any remaining Ray processes
+                try:
+                    subprocess.run(["ray", "stop", "--force"], check=False, capture_output=True)
+                    time.sleep(2)
+                except:
+                    pass
+                
+                # Clean up placement groups
+                try:
+                    subprocess.run(["pkill", "-f", "ray"], check=False, capture_output=True)
+                    time.sleep(1)
+                except:
+                    pass
+                
+                # Reinitialize Ray with different parameters
+                ray.init(
+                    address=None, 
+                    runtime_env={
+                        'env_vars': {
+                            'TOKENIZERS_PARALLELISM': 'true', 
+                            'NCCL_DEBUG': 'WARN',
+                            'RAY_DISABLE_IMPORT_WARNING': '1'
+                        }
+                    }, 
+                    object_store_memory=1500000000 + (attempt * 500000000),  # Increase memory each retry
+                    _plasma_directory="/tmp", 
+                    num_cpus=4, 
+                    ignore_reinit_error=True,
+                    log_to_driver=False  # Reduce logging to avoid conflicts
+                )
+                
+            trainer.init_workers()
+            break
+        except Exception as e:
+            print(f"Worker initialization attempt {attempt + 1} failed: {e}")
+            if attempt < max_retries - 1:
+                print(f"Retrying in 15 seconds...")
+                time.sleep(15)  # Longer wait between retries
+            else:
+                print("All worker initialization attempts failed")
+                raise
     trainer.fit()
 
 
@@ -190,11 +247,8 @@ if __name__ == '__main__':
         main()
     except KeyboardInterrupt:
         import sys
-        import traceback
         traceback.print_exc()
         sys.exit(0)
     except Exception as e:
-        import os
-        import traceback
         traceback.print_exc()
         os._exit(1)
