@@ -287,6 +287,14 @@ LanguageModelList: list[LanguageModel] = [
         datetime(2023, 4, 30),
         link="https://openai.com/index/spring-update",
     ),
+    ## Forge (OpenAI-compatible)
+    LanguageModel(
+        "OpenAI/gpt-4o-mini",
+        "Forge-OpenAI-GPT-4o-mini",
+        LMStyle.OpenAIChat,
+        datetime(2024, 7, 18),
+        link="https://forge.tensorblock.co",
+    ),
     ## O1-Mini and O1-Preview
     LanguageModel(
         "o1-preview-2024-09-12",
