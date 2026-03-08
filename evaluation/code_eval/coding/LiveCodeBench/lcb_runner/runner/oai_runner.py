@@ -12,12 +12,20 @@ from lcb_runner.runner.base_runner import BaseRunner
 
 
 class OpenAIRunner(BaseRunner):
-    client = OpenAI(
-        api_key=os.getenv("OPENAI_KEY"),
-    )
+    @staticmethod
+    def _build_client():
+        forge_api_key = os.getenv("FORGE_API_KEY")
+        if forge_api_key:
+            return OpenAI(
+                api_key=forge_api_key,
+                base_url=os.getenv("FORGE_API_BASE")
+                or "https://api.forge.tensorblock.co/v1",
+            )
+        return OpenAI(api_key=os.getenv("OPENAI_KEY"))
 
     def __init__(self, args, model):
         super().__init__(args, model)
+        self.client = self._build_client()
         if model.model_style == LMStyle.OpenAIReasonPreview:
             self.client_kwargs: dict[str | str] = {
                 "model": args.model,
@@ -49,7 +57,7 @@ class OpenAIRunner(BaseRunner):
         assert isinstance(prompt, list)
 
         try:
-            response = OpenAIRunner.client.chat.completions.create(
+            response = self.client.chat.completions.create(
                 messages=prompt,
                 **self.client_kwargs,
             )
